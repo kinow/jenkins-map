@@ -158,7 +158,8 @@ has 'plugin_index' => (
 
 has 'maintainers' => (
     is      => 'rw',
-    isa     => 'HashRef[CPAN::Map::Maintainer]'
+    isa     => 'HashRef[CPAN::Map::Maintainer]',
+    default => sub { {} }
 );
 
 sub maintainer_count { scalar keys %{ shift->maintainers }; }
@@ -182,7 +183,7 @@ sub generate {
     $self->list_plugins_by_label;
     $self->map_plugins_to_plane;
     $self->identify_mass_areas;
-#    $self->load_maintainer_data;
+    $self->load_maintainer_data;
 #    $self->load_ratings_data;
 #    $self->write_output_mappings;
 }
@@ -523,42 +524,63 @@ sub load_maintainer_data {
 
     $self->progress_message("Loading maintainer details");
 
-    my $z = gunzip_open($self->authors_source);
-
-    # Work out which maintainers we're interested in
-    my %maint;
-    $self->each_distro(sub {
-        my $cpan_id = shift->maintainer_id;
-        $maint{$cpan_id} //= CPAN::Map::Maintainer->new( id => $cpan_id );
-    });
-
-    # Read the authors file to get more details
+    # Iterate plugin/developers to get more details
     my $count  = 0;
     my $gcount = 0;
-    while($_ = $z->getline) {
-        my($id, $name, $email) = m{
-            ^alias
-            \s+([\w-]+)                # author ID
-            \s+"(.*?)\s<               # author name
-            (.*?)>                     # email address
-        }x or next;
-        my $maintainer = $maint{$id} or next; # skip if no uploads
-        $maintainer->name($name);
-        $count++;
-        if($email) {
-            $email =~ s{^\s+}{};
-            $email =~ s{\s+$}{};
-            $email =~ s{\s+dot\s+}{.}g;
-            $email =~ s{\s+at\s+}{@};
-            if($email !~ /\s/  and  $email =~ /@/) {
-                $maintainer->email($email);
-                $gcount++;
+    $self->each_plugin(sub {
+    	my $plugin = shift;
+    	foreach my $developer (values $plugin->developers) {
+    		my $id = undef;
+            if ( defined $developer->{'developerId'} ) {
+                $id = $developer->{'developerId'};
             }
-        }
-    }
-    $z->close();
+            if(not defined $id) {
+            	next;
+            }
+            $count++;
+    		my $name = 'Missing name';
+    		if ( defined $developer->{'name'} ) {
+    			$name = $developer->{'name'};
+    		}
+    		my $email = 'Missing e-mail';
+            if ( defined $developer->{'email'} ) {
+                $email = $developer->{'email'};
+            }
+            my $maintainer = CPAN::Map::Maintainer->new(
+               id => $id, 
+               name => $name, 
+               email => $email
+            );
+            
+            $self->maintainers->{$id} = $maintainer;
+    	}
+        #my $cpan_id = shift->maintainer_id;
+        #$maint{$cpan_id} //= CPAN::Map::Maintainer->new( id => $cpan_id );
+    });
 
-    $self->maintainers(\%maint);
+#    while($_ = $z->getline) {
+#        my($id, $name, $email) = m{
+#            ^alias
+#            \s+([\w-]+)                # author ID
+#            \s+"(.*?)\s<               # author name
+#            (.*?)>                     # email address
+#        }x or next;
+#        my $maintainer = $maint{$id} or next; # skip if no uploads
+#        $maintainer->name($name);
+#        $count++;
+#        if($email) {
+#            $email =~ s{^\s+}{};
+#            $email =~ s{\s+$}{};
+#            $email =~ s{\s+dot\s+}{.}g;
+#            $email =~ s{\s+at\s+}{@};
+#            if($email !~ /\s/  and  $email =~ /@/) {
+#                $maintainer->email($email);
+#                $gcount++;
+#            }
+#        }
+#    }
+#
+#    $self->maintainers(\%maint);
 
     $self->progress_message(
         " - found $count 'active' maintainers\n" .
@@ -750,9 +772,9 @@ use namespace::autoclean;
 use Gravatar::URL qw(gravatar_id);
 
 has 'id'          => ( is => 'ro', isa => 'Str' );
-has 'name'        => ( is => 'rw', isa => 'Str' );
-has 'email'       => ( is => 'rw', isa => 'Str' );
-has 'gravatar_id' => ( is => 'rw', isa => 'Str' );
+has 'name'        => ( is => 'rw', isa => 'Str', default => 'Missing developer name' );
+has 'email'       => ( is => 'rw', isa => 'Str', default => 'Missing developer e-mail' );
+has 'gravatar_id' => ( is => 'rw', isa => 'Str', default => 'Missing Gravatar ID' );
 
 before 'email' => sub {
     my $self  = shift;
