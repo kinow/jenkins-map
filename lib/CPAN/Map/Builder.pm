@@ -3,6 +3,7 @@ package CPAN::Map::Builder;
 use Moose;
 use namespace::autoclean;
 
+use feature 'say';
 use FindBin qw();
 use File::Path qw(make_path);
 require File::Basename;
@@ -13,6 +14,8 @@ require IO::Uncompress::Gunzip;
 require Text::CSV_XS;
 use Digest::MD5 qw(md5_hex);
 use Data::Dumper;
+use JSON qw( decode_json );     # From CPAN
+use Data::Dumper;               # Perl core module
 
 
 my $default_config = File::Spec->catfile($ENV{HOME}, '.config', 'cpan-map');
@@ -28,7 +31,7 @@ has 'verbose' => (
     is      => 'rw',
     isa     => 'Bool',
     lazy    => 1,
-    default => 0
+    default => 1
 );
 
 has 'config_file' => (
@@ -87,37 +90,19 @@ has 'zoom_scales' => (
     # corresponding changes to the CSS file
 );
 
-has 'mod_list_source' => (
+has 'plugins_stats_url' => (
+    is      => 'rw',
+    isa     => 'Str',
+    lazy    => 1,
+    default => 'http://updates.jenkins-ci.org/update-center.json',
+);
+
+has 'plugins_stats' => (
     is      => 'rw',
     isa     => 'Str',
     lazy    => 1,
     default => sub {
-        File::Spec->catfile(shift->source_data_dir, '02packages.details.txt.gz');
-    },
-);
-
-has 'authors_source' => (
-    is      => 'rw',
-    isa     => 'Str',
-    lazy    => 1,
-    default => sub {
-        File::Spec->catfile(shift->source_data_dir, '01mailrc.txt.gz');
-    },
-);
-
-has 'ratings_source_url' => (
-    is      => 'rw',
-    isa     => 'Str',
-    lazy    => 1,
-    default => 'http://cpanratings.perl.org/csv/all_ratings.csv',
-);
-
-has 'ratings_source' => (
-    is      => 'rw',
-    isa     => 'Str',
-    lazy    => 1,
-    default => sub {
-        File::Spec->catfile(shift->source_data_dir, 'all_ratings.csv');
+        File::Spec->catfile(shift->source_data_dir, 'update-center.json');
     },
 );
 
@@ -155,16 +140,16 @@ has 'mass_map' => (
     default => sub { {} },
 );
 
-has 'distro_list' => (
+has 'plugin_list' => (
     is      => 'rw',
-    isa     => 'ArrayRef[CPAN::Map::Distribution]',
+    isa     => 'ArrayRef[CPAN::Map::Plugin]',
     lazy    => 1,
     default => sub { [] },
 );
 
-sub distro_count { scalar @{ shift->distro_list }; }
+sub plugin_count { scalar @{ shift->plugin_list }; }
 
-has 'distro_index' => (
+has 'plugin_index' => (
     is      => 'rw',
     isa     => 'HashRef[Int]',
     lazy    => 1,
@@ -183,7 +168,7 @@ has 'mod_list_date'    => ( is => 'rw', isa => 'Str' );
 has 'slug_of_the_day'  => ( is => 'rw', isa => 'Str' );
 has 'plane_rows'       => ( is => 'rw', isa => 'Int' );
 has 'plane_cols'       => ( is => 'rw', isa => 'Int' );
-has 'module_count'     => ( is => 'rw', isa => 'Int' );
+#has 'plugin_count'     => ( is => 'rw', isa => 'Int' );
 has 'plane'            => ( is => 'rw', isa => 'Ref' );
 
 
@@ -194,12 +179,12 @@ sub generate {
     if($self->refresh_data) {
         $self->update_source_data;
     }
-    $self->list_distros_by_ns;
-    $self->map_distros_to_plane;
+    $self->list_plugins_by_label;
+    $self->map_plugins_to_plane;
     $self->identify_mass_areas;
-    $self->load_maintainer_data;
-    $self->load_ratings_data;
-    $self->write_output_mappings;
+#    $self->load_maintainer_data;
+#    $self->load_ratings_data;
+#    $self->write_output_mappings;
 }
 
 
@@ -210,31 +195,16 @@ sub progress_message {
     print $message, "\n";
 }
 
-
 sub warning_message {
     my($self, $message) = @_;
     warn "WARNING: <<< $message >>>\n";
 }
-
-
-sub gunzip_open {
-    my($path) = @_;
-
-    no warnings qw( once );
-
-    my $z = IO::Uncompress::Gunzip->new($path)
-        or die $IO::Uncompress::Gunzip::GunzipError;
-
-    return $z;
-}
-
 
 sub config_item {
     my($self, $key, $default) = @_;
 
     return $self->config->{$key} // $default;
 }
-
 
 sub update_source_data {
     my($self) = @_;
@@ -244,112 +214,119 @@ sub update_source_data {
 
     make_path($data_dir) if not -d $data_dir;
 
-    my $cpan_mirror = $self->config_item(
-        'cpan_mirror' => 'http://cpan.perl.org/'
-    );
-
     my($src_url, $dst_file, $status);
 
-    $src_url  = $cpan_mirror . 'modules/02packages.details.txt.gz';
-    $dst_file = $self->mod_list_source;
-    $status   = LWP::Simple::mirror($src_url, $dst_file);
-    die "Status code: $status downloading $src_url"
-        unless $status =~ m/^(200|304)$/;
-
-    $src_url  = $cpan_mirror . 'authors/01mailrc.txt.gz';
-    $dst_file = $self->authors_source;
-    $status   = LWP::Simple::mirror($src_url, $dst_file);
-    die "Status code: $status downloading $src_url"
-        unless $status =~ m/^(200|304)$/;
-
-    $dst_file = $self->ratings_source;
+    $dst_file = $self->plugins_stats;
     if(!-e $dst_file  or  -M $dst_file > 0.8) {
-        $src_url  = $self->ratings_source_url;
+        $src_url  = $self->plugins_stats_url;
         $status   = LWP::Simple::mirror($src_url, $dst_file);
         die "Status code: $status downloading $src_url"
             unless $status =~ m/^(200|304)$/;
     }
 }
 
-
-sub list_distros_by_ns {
+sub list_plugins_by_label {
     my $self = shift;
 
-    $self->progress_message('Listing all CPAN distros');
+    $self->progress_message('Listing all Jenkins plug-ins');
 
-    my $z = gunzip_open($self->mod_list_source);
-
-    # Process the header
-
-    my %month_num = qw(
-        jan 01 feb 02 mar 03 apr 04 may 05 jun 06
-        jul 07 aug 08 sep 09 oct 10 nov 11 dec 12
-    );
-    while($_ = $z->getline) {
-        last unless /\S/;
-        if(
-            my($d, $m, $y, $t) = m{
-                ^Last-Updated:\s+\S+,\s+
-                (\d+)\s+(\S\S\S)\s+(\d\d\d\d)\s+(\d\d:\d\d:\d\d)
-            }x
-        ) {
-            $m = $month_num{lc($m)};
-            $self->mod_list_date("$y-$m-$d $t UTC");
-            my $hex = md5_hex( $self->mod_list_date );
-            $self->slug_of_the_day(substr($hex, 0, 8));
-        }
+    open FILE, $self->plugins_stats or die $!;
+    my $json = do { local $/; <FILE> };
+    $json =~ s/^updateCenter.post\(//;
+    $json =~ s/\)\;//;
+    
+    my $decoded_json = decode_json( $json );
+    
+    my %plugins = %{ $decoded_json->{'plugins'} };
+    
+    # Build a big hash of plugins by label
+    my %label_plugins = ();
+    while(my ($plugin_name, $plugin_body) = each %plugins) {
+    	my $plugin = $self->_parse_plugin($plugin_body);
+    	if(defined $plugin->labels) {
+    		if(ref $plugin->labels eq 'ARRAY') {
+		    	for my $plugin_label (@{$plugin->labels}) {
+		    		if(not exists $label_plugins{$plugin_label}) {
+		    			@{$label_plugins{$plugin_label}} = ();
+		    		}
+		    		push @{$label_plugins{$plugin_label}}, $plugin;
+		    	}
+    	   } else {
+    	   	   if(not exists $label_plugins{$plugin->labels}) {
+                @{$label_plugins{$plugin->labels}} = ();
+               }
+               push @{$label_plugins{$plugin->labels}}, $plugin;
+    	   }
+    	}
+    	$self->add_plugin($plugin);
     }
-    die "Failed to extract timestamp from module-list" unless $self->slug_of_the_day;
+    
+#    while( my ($key, $value) = each(%label_plugins) ) {
+#    	my $dump = Dumper $value;
+#    	say "$key = $dump";
+#    }
+    
+    $self->progress_message(" - found " . scalar(keys %plugins) . " plugins");
 
     # Build a big hash of distros by namespace prefix
-    my %prefix_dists = ();
-    my $module_count = 0;
-    while(my $line = $z->getline) {
-        $module_count++;
-        my($prefix, $distro_name, $maintainer, $module)
-            = _parse_module_line($line) or next;
-        my $distro = $prefix_dists{$prefix}->{$distro_name};
-        if(not defined $distro) {
-            $distro = $prefix_dists{$prefix}->{$distro_name} =
-                CPAN::Map::Distribution->new(
-                    name          => $distro_name,
-                    ns            => $prefix,
-                    maintainer_id => $maintainer,
-                );
-        }
-        $distro->check_for_main_module($module);
-    }
-    $z->close();
+    
+#    my $plugin_count = 0; # TODO
+#    while (my $line = <FILE>) {
+#        my($name, $labels) = _parse_plugin_line($line) or next;
+#        my $plugin = $label_plugins{$labels}->{$name};
+#        if(not defined $plugin) {
+#            $plugin = $label_plugins{$labels}->{$name} =
+#                CPAN::Map::Distribution->new(
+#                    name          => $name,
+#                    ns            => $labels,
+#                    maintainer_id => '$maintainer',
+#                );
+#        }
+#        # TODO: $plugin->check_for_main_module($module);
+#    }
 
     # Create an alphabetical list of distros and save counts ('mass') of
     # distros per namespace
 
-    my $mass_map = $self->mass_map;
-    foreach my $prefix ( sort keys %prefix_dists ) {
-        my $dists_for_ns = delete $prefix_dists{$prefix};
-        my @dists = keys %$dists_for_ns;
-        my $this_ns = $mass_map->{$prefix} = CPAN::Map::Namespace->new(
-            name => $prefix,
-            mass => scalar(@dists),
-        );
+#    foreach my $label ( sort keys %label_plugins ) {
+#        my $dists_for_ns = delete $label_plugins{$label};
+#        my @plugins = keys %$dists_for_ns;
+#        my $this_ns = $mass_map->{$label} = CPAN::Map::Namespace->new(
+#            name => $label,
+#            mass => scalar(@plugins),
+#        );
+#
+#        foreach my $name (sort { lc($a) cmp lc($b) } @plugins) {
+#            my $plugin = $dists_for_ns->{$name};
+#            my($dist_prefix) = $name =~ m{^(\w+)};
+#            if(lc($dist_prefix) eq $prefix  and  $dist_prefix ne $prefix) {
+#                $this_ns->name($dist_prefix);  # prefer this capitalisation
+#            }
+#            $self->add_plugin($plugin);
+#        }
+#    }
 
-        foreach my $dist_name (sort { lc($a) cmp lc($b) } @dists) {
-            my $distro = $dists_for_ns->{$dist_name};
-            my($dist_prefix) = $dist_name =~ m{^(\w+)};
-            if(lc($dist_prefix) eq $prefix  and  $dist_prefix ne $prefix) {
-                $this_ns->name($dist_prefix);  # prefer this capitalisation
-            }
-            $self->add_distro($distro);
-        }
-    }
+    #$self->plugin_count($plugin_count);
+    #$self->progress_message(" - found " . $self->plugin_count . " plugins");
+    #$self->progress_message(" - found " . $self->label_count . " labels");
+}
 
-    $self->module_count($module_count);
-    $self->progress_message(" - found " . $self->module_count . " modules");
-    $self->progress_message(" - found " . $self->distro_count . " distributions");
+sub _parse_plugin {
+	my ($self, $plugin_body) = @_;
+	return CPAN::Map::Plugin->new(
+	   name => $plugin_body->{'name'}, 
+	   buildDate => $plugin_body->{'buildDate'},
+	   excerpt => $plugin_body->{'excerpt'},
+	   title => $plugin_body->{'title'}, 
+	   wiki => $plugin_body->{'wiki'}, 
+	   version => $plugin_body->{'version'}, 
+	   developers => $plugin_body->{'developers'},
+	   labels => $plugin_body->{'labels'}
+	);
 }
 
 
-sub _parse_module_line{
+sub _parse_plugin_line{
     local($_) = shift;
     return if m{[.]pm(?:[.]gz)?$};
     my($module, $maintainer, $distro_name) = $_ =~ m{
@@ -371,46 +348,46 @@ sub _parse_module_line{
 }
 
 
-sub add_distro {
-    my($self, $distro) = @_;
+sub add_plugin {
+    my($self, $plugin) = @_;
 
-    my $distro_list = $self->distro_list;
-    $distro->index( scalar(@$distro_list) );
-    push @$distro_list, $distro;
-    $self->distro_index->{ $distro->name } = $distro->index;
+    my $plugin_list = $self->plugin_list;
+    $plugin->index( scalar(@$plugin_list) );
+    push @$plugin_list, $plugin;
+    $self->plugin_index->{ $plugin->name } = $plugin->index;
 }
 
 
-sub distro {
+sub plugin {
     my($self, $i) = @_;
 
     return unless(defined($i));
-    return $self->distro_list->[$i];
+    return $self->plugin_list->[$i];
 }
 
 
-sub distro_by_name {
+sub plugin_by_name {
     my($self, $name) = @_;
 
-    my $i = $self->distro_index->{$name} or return;
-    return $self->distro($i);
+    my $i = $self->plugin_index->{$name} or return;
+    return $self->plugin($i);
 }
 
 
-sub map_distros_to_plane {
+sub map_plugins_to_plane {
     my $self = shift;
 
-    $self->progress_message('Mapping all distros into 2D space');
+    $self->progress_message('Mapping all plug-ins into 2D space');
 
-    my $mapper = $self->create_plane_mapper;
+    my $mapper = $self->create_plugin_mapper;
 
     my($max_row, $max_col, @plane) = (0, 0);
-    $self->each_distro(sub {
-        my($distro) = @_;
-        my($row, $col) = $mapper->row_col_from_index($distro->index);
-        $plane[$row][$col] = $distro->index;
-        $distro->row($row);
-        $distro->col($col);
+    $self->each_plugin(sub {
+        my($plugin) = @_;
+        my($row, $col) = $mapper->row_col_from_index($plugin->index);
+        $plane[$row][$col] = $plugin->index;
+        $plugin->row($row);
+        $plugin->col($col);
         $max_row = $row if $row > $max_row;
         $max_col = $col if $col > $max_col;
     });
@@ -425,14 +402,14 @@ sub map_distros_to_plane {
 }
 
 
-sub create_plane_mapper {
+sub create_plugin_mapper {
     my($self) = @_;
 
-    return CPAN::Map::PlaneMapperHilbert->new(set_size => $self->distro_count);
+    return CPAN::Map::PlaneMapperHilbert->new(set_size => $self->plugin_count);
 }
 
 
-sub dist_at {
+sub plugin_at {
     my($self, $row, $col) = @_;
 
     my $plane = $self->plane or return;
@@ -442,14 +419,14 @@ sub dist_at {
 }
 
 
-sub each_distro {
+sub each_plugin {
     my($self, $handler) = @_;
 
-    $handler->($_) foreach ( @{ $self->distro_list } );
+    $handler->($_) foreach ( @{ $self->plugin_list } );
 }
 
 
-sub each_namespace {
+sub each_label {
     my($self, $handler) = @_;
 
     my $mass_map = $self->mass_map;
@@ -457,7 +434,7 @@ sub each_namespace {
 }
 
 
-sub namespace_for_distro {
+sub label_for_distro {
     my($self, $distro) = @_;
     return $self->mass_map->{ $distro->ns };
 }
@@ -477,22 +454,22 @@ sub identify_mass_areas {
 
     # Work out which masses are neighbours (skipping non-critical ones)
     my %neighbour;
-    $self->each_distro(sub {
-        my($this_distro) = @_;
-        my $this_prefix = $this_distro->ns;
-        my $this_mass = $mass_map->{$this_prefix} or return; # == next
-        $this_mass->update_stats($this_distro); # for mass center
-        $neighbour{ $this_distro->ns } //= {};  # this is actually needed
+    $self->each_plugin(sub {
+        my($this_plugin) = @_;
+        my $this_name = $this_plugin->name;
+        my $this_mass = $mass_map->{$this_name} or return; # == next
+        $this_mass->update_stats($this_plugin); # for mass center
+        $neighbour{ $this_plugin->ns } //= {};  # this is actually needed
         foreach my $look ('right', 'down') {
             my($row1, $col1) = $look eq 'right'
-                             ? ($this_distro->row, $this_distro->col + 1)
-                             : ($this_distro->row + 1, $this_distro->col);
+                             ? ($this_plugin->row, $this_plugin->col + 1)
+                             : ($this_plugin->row + 1, $this_plugin->col);
             my $that_distro = $self->dist_at($row1, $col1) or next;
             my $that_prefix = $that_distro->ns;
             my $that_mass   = $mass_map->{$that_prefix} or next; # not critical
-            if($this_prefix ne $that_prefix) { # each neighbours the other
-                $neighbour{$this_prefix}->{$that_prefix} = 1;
-                $neighbour{$that_prefix}->{$this_prefix} = 1;
+            if($this_name ne $that_prefix) { # each neighbours the other
+                $neighbour{$this_name}->{$this_name} = 1;
+                $neighbour{$this_name}->{$this_name} = 1;
             }
         }
     });
@@ -694,21 +671,22 @@ __PACKAGE__->meta->make_immutable;
 
 
 
-package CPAN::Map::Distribution;
+package CPAN::Map::Plugin;
 
 use Moose;
 use namespace::autoclean;
 
 has 'name'              => ( is => 'ro', isa => 'Str' );
-has 'ns'                => ( is => 'ro', isa => 'Str' );
-has 'maintainer_id'     => ( is => 'rw', isa => 'Str' );
-has 'index'             => ( is => 'rw', isa => 'Int' );
+has 'buildDate'         => ( is => 'rw', isa => 'Str' );
+has 'excerpt'           => ( is => 'rw', isa => 'Str' );
+has 'title'             => ( is => 'rw', isa => 'Str' );
 has 'row'               => ( is => 'rw', isa => 'Int' );
 has 'col'               => ( is => 'rw', isa => 'Int' );
-has 'rating_score'      => ( is => 'rw', isa => 'Num' );
-has 'rating_count'      => ( is => 'rw', isa => 'Int' );
-has 'is_eponymous'      => ( is => 'rw', isa => 'Bool', default => 0 );
-has 'main_module_guess' => ( is => 'rw', isa => 'ArrayRef');
+has 'index'               => ( is => 'rw', isa => 'Int' );
+has 'wiki'              => ( is => 'rw', isa => 'Any' );
+has 'version'           => ( is => 'rw', isa => 'Any' );
+has 'labels'            => ( is => 'rw');
+has 'developers'        => ( is => 'rw');
 
 
 sub main_module {
