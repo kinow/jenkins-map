@@ -1,3 +1,3 @@
 #!/bin/sh
 
-perl -I../lib/ jenkins-map
+perl -Ilib/ bin/jenkins-map

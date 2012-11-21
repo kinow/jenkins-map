@@ -452,7 +452,7 @@ sub identify_mass_areas {
     while(my($prefix, $ns) = each %$mass_map) {
         delete $mass_map->{$prefix} if $ns->mass < $critical_mass;
     }
-
+    
     # Work out which masses are neighbours (skipping non-critical ones)
     my %neighbour;
     $self->each_plugin(sub {
@@ -467,7 +467,7 @@ sub identify_mass_areas {
                              : ($this_plugin->row + 1, $this_plugin->col);
             my $that_distro = $self->dist_at($row1, $col1) or next;
             my $that_prefix = $that_distro->ns;
-            my $that_mass   = $mass_map->{$that_prefix} or next; # not critical
+            #my $that_mass   = $mass_map->{$that_prefix} or next; # not critical
             if($this_name ne $that_prefix) { # each neighbours the other
                 $neighbour{$this_name}->{$this_name} = 1;
                 $neighbour{$this_name}->{$this_name} = 1;
