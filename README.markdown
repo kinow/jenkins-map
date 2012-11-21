@@ -1,12 +1,11 @@
-CPAN::Map
+Jenkins::Map
 =========
 
-This repository hosts the source code for the http://mapofcpan.org/ web site.
-You can check it out and run it locally.  It will eventually be packaged as a
-CPAN distribution to make installing the dependencies easier - they're
-currently listed in dist.ini.
+This code is based in cpan-map. Actually, it is almost the same data. But 
+instead of using distributions/namespaces, it uses plugins/labels.
 
-The web site itself is a client-side Javascript app that talks to the
-https://api.metacpan.org/ site.  The Javascript code loads some images and
-other data which are generated periodically as static files by the supplied
-Perl scripts.
+There is no intention of releasing this code to Perl repositories, especially 
+since the modification was started by a Java developer, not a Perl one.
+
+Feel free to modify this code freely, respecting the original project's 
+license.
