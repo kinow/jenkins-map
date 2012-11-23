@@ -60,7 +60,7 @@ has 'critical_mass' => (
     is      => 'rw',
     isa     => 'Int',
     lazy    => 1,
-    default => 30
+    default => 10
 );
 
 has 'source_data_dir' => (
@@ -149,6 +149,13 @@ has 'plugin_list' => (
 
 sub plugin_count { scalar @{ shift->plugin_list }; }
 
+has 'label_plugins' => (
+    is      => 'rw', 
+    isa     => 'Any',
+    lazy    => 1,
+    default => sub { [] },
+);
+
 has 'plugin_index' => (
     is      => 'rw',
     isa     => 'HashRef[Int]',
@@ -169,7 +176,7 @@ has 'mod_list_date'    => ( is => 'rw', isa => 'Str' );
 has 'slug_of_the_day'  => ( is => 'rw', isa => 'Str' );
 has 'plane_rows'       => ( is => 'rw', isa => 'Int' );
 has 'plane_cols'       => ( is => 'rw', isa => 'Int' );
-#has 'plugin_count'     => ( is => 'rw', isa => 'Int' );
+has 'label_count'     => ( is => 'rw', isa => 'Int' );
 has 'plane'            => ( is => 'rw', isa => 'Ref' );
 
 
@@ -184,8 +191,8 @@ sub generate {
     $self->map_plugins_to_plane;
     $self->identify_mass_areas;
     $self->load_maintainer_data;
-#    $self->load_ratings_data;
-#    $self->write_output_mappings;
+    #$self->load_ratings_data;
+    $self->write_output_mappings;
 }
 
 
@@ -245,15 +252,15 @@ sub list_plugins_by_label {
     while(my ($plugin_name, $plugin_body) = each %plugins) {
     	my $plugin = $self->_parse_plugin($plugin_body);
     	if(defined $plugin->labels) {
-    		if(ref $plugin->labels eq 'ARRAY') {
-		    	for my $plugin_label (@{$plugin->labels}) {
-		    		if(not exists $label_plugins{$plugin_label}) {
-		    			@{$label_plugins{$plugin_label}} = ();
-		    		}
-		    		push @{$label_plugins{$plugin_label}}, $plugin;
-		    	}
+            if(ref $plugin->labels eq 'ARRAY') {
+                for my $plugin_label (@{$plugin->labels}) {
+                        if(not exists $label_plugins{$plugin_label}) {
+                                @{$label_plugins{$plugin_label}} = ();
+                        }
+                        push @{$label_plugins{$plugin_label}}, $plugin;
+                }
     	   } else {
-    	   	   if(not exists $label_plugins{$plugin->labels}) {
+               if(not exists $label_plugins{$plugin->labels}) {
                 @{$label_plugins{$plugin->labels}} = ();
                }
                push @{$label_plugins{$plugin->labels}}, $plugin;
@@ -262,54 +269,21 @@ sub list_plugins_by_label {
     	$self->add_plugin($plugin);
     }
     
-#    while( my ($key, $value) = each(%label_plugins) ) {
-#    	my $dump = Dumper $value;
-#    	say "$key = $dump";
-#    }
+    my $mass_map = $self->mass_map;
+    my $label_count = 0;
+    foreach my $label (keys %label_plugins) {
+    	$label_count++;
+    	
+    	$mass_map->{$label} = CPAN::Map::Namespace->new(
+            name => $label,
+            mass => scalar(@{$label_plugins{$label}}),
+        );
+    }
     
-    $self->progress_message(" - found " . scalar(keys %plugins) . " plugins");
+    $self->label_count($label_count);
 
-    # Build a big hash of distros by namespace prefix
-    
-#    my $plugin_count = 0; # TODO
-#    while (my $line = <FILE>) {
-#        my($name, $labels) = _parse_plugin_line($line) or next;
-#        my $plugin = $label_plugins{$labels}->{$name};
-#        if(not defined $plugin) {
-#            $plugin = $label_plugins{$labels}->{$name} =
-#                CPAN::Map::Distribution->new(
-#                    name          => $name,
-#                    ns            => $labels,
-#                    maintainer_id => '$maintainer',
-#                );
-#        }
-#        # TODO: $plugin->check_for_main_module($module);
-#    }
-
-    # Create an alphabetical list of distros and save counts ('mass') of
-    # distros per namespace
-
-#    foreach my $label ( sort keys %label_plugins ) {
-#        my $dists_for_ns = delete $label_plugins{$label};
-#        my @plugins = keys %$dists_for_ns;
-#        my $this_ns = $mass_map->{$label} = CPAN::Map::Namespace->new(
-#            name => $label,
-#            mass => scalar(@plugins),
-#        );
-#
-#        foreach my $name (sort { lc($a) cmp lc($b) } @plugins) {
-#            my $plugin = $dists_for_ns->{$name};
-#            my($dist_prefix) = $name =~ m{^(\w+)};
-#            if(lc($dist_prefix) eq $prefix  and  $dist_prefix ne $prefix) {
-#                $this_ns->name($dist_prefix);  # prefer this capitalisation
-#            }
-#            $self->add_plugin($plugin);
-#        }
-#    }
-
-    #$self->plugin_count($plugin_count);
-    #$self->progress_message(" - found " . $self->plugin_count . " plugins");
-    #$self->progress_message(" - found " . $self->label_count . " labels");
+    $self->progress_message(" - found " . $self->plugin_count . " plugins");
+    $self->progress_message(" - found " . $self->label_count . " labels");
 }
 
 sub _parse_plugin {
@@ -416,7 +390,7 @@ sub plugin_at {
     my $plane = $self->plane or return;
     my $r = $plane->[$row] or return;
     my $i = $r->[$col];
-    return $self->distro($i);
+    return $self->plugin($i);
 }
 
 
@@ -449,28 +423,56 @@ sub identify_mass_areas {
     # Weed out namespaces smaller than 'critical mass'
     my $mass_map = $self->mass_map;
     my $critical_mass = $self->critical_mass;
-    while(my($prefix, $ns) = each %$mass_map) {
-        delete $mass_map->{$prefix} if $ns->mass < $critical_mass;
+    while(my($prefix, $label) = each %$mass_map) {
+        if ( $label->mass < $critical_mass ) {
+            delete $mass_map->{$prefix};
+        }
     }
+    
+    #say Dumper $mass_map;
     
     # Work out which masses are neighbours (skipping non-critical ones)
     my %neighbour;
     $self->each_plugin(sub {
         my($this_plugin) = @_;
         my $this_name = $this_plugin->name;
-        my $this_mass = $mass_map->{$this_name} or return; # == next
-        $this_mass->update_stats($this_plugin); # for mass center
-        $neighbour{ $this_plugin->ns } //= {};  # this is actually needed
-        foreach my $look ('right', 'down') {
-            my($row1, $col1) = $look eq 'right'
-                             ? ($this_plugin->row, $this_plugin->col + 1)
-                             : ($this_plugin->row + 1, $this_plugin->col);
-            my $that_distro = $self->dist_at($row1, $col1) or next;
-            my $that_prefix = $that_distro->ns;
-            #my $that_mass   = $mass_map->{$that_prefix} or next; # not critical
-            if($this_name ne $that_prefix) { # each neighbours the other
-                $neighbour{$this_name}->{$this_name} = 1;
-                $neighbour{$this_name}->{$this_name} = 1;
+        
+        # plug-ins with no label
+        if( not $this_plugin->labels ) {
+            return;
+        }
+        
+        foreach my $label (@{$this_plugin->labels}) {
+            my $this_mass = $mass_map->{$label} or return; # == next
+            
+            $this_mass->update_stats($this_plugin); # for mass center
+            
+            #$neighbour{ $this_plugin->ns } //= {};  # this is actually needed
+            $neighbour{ $label } //= {};  # this is actually needed
+            foreach my $look ('right', 'down') {
+                my($row1, $col1) = $look eq 'right'
+                                 ? ($this_plugin->row, $this_plugin->col + 1)
+                                 : ($this_plugin->row + 1, $this_plugin->col);
+                my $that_plugin = $self->plugin_at($row1, $col1) or next;
+                my $that_prefixes = $that_plugin->labels;
+                
+                my $contains_label = 0;
+                foreach my $that_label (@{$that_prefixes}) {
+                    if($that_label eq $label) {
+                        $contains_label = 1;
+                    }
+                }
+                if($contains_label) {
+                    next;
+                } #skip if this plug-in contains the same label
+                
+                foreach my $that_label (@{$that_prefixes}) {
+                    my $that_mass = $mass_map->{$that_label} or next; # not critical
+                    if($label ne $that_label) { # each neighbours the other
+                        $neighbour{$label}->{$that_label} = 1;
+                        $neighbour{$that_label}->{$label} = 1;
+                    }
+                }
             }
         }
     });
@@ -484,13 +486,13 @@ sub identify_mass_areas {
     my $count = scalar @critical_ns;
     $self->progress_message(
         " - found $count namespaces containing " . $self->critical_mass .
-        " or more distros"
+        " or more plugins"
     );
 
     # Assign colors to namespaces with critical mass
     $self->progress_message(" - allocating colours to map regions");
-    my $colour_map = map_colours({}, \%neighbour, @critical_ns)
-        or die "Unable to assign colour map";
+    my $colour_map = map_colours({}, \%neighbour, @critical_ns);
+        #or die "Unable to assign colour map";
 
     while(my($key, $value) = each %$colour_map) {
         my $mass = $mass_map->{$key};
@@ -709,33 +711,30 @@ has 'wiki'              => ( is => 'rw', isa => 'Any' );
 has 'version'           => ( is => 'rw', isa => 'Any' );
 has 'labels'            => ( is => 'rw');
 has 'developers'        => ( is => 'rw');
+has 'main_module_guess' => ( is => 'rw', isa => 'ArrayRef');
 
 
 sub main_module {
     my($self) = @_;
 
-    return $self->name if $self->is_eponymous;
+    return $self->name; # if $self->is_eponymous;
     my $guess = $self->main_module_guess;
     return $guess->[0];
 }
 
 
-sub check_for_main_module {
-    my($self, $module) = @_;
+sub check_for_main_plugin {
+    my($self, $plugin) = @_;
 
-    return if $self->is_eponymous();    # We already found the main module
-    if($module eq $self->name) {
-        return $self->is_eponymous(1);  # Module name matches distro name
-    }
-    my $score = _score_guess($self->name, $module);
+    my $score = _score_guess($self->name, $plugin);
     if(my $current = $self->main_module_guess) {
         my($guess, $guess_score) = @$current;
         return if $score < $guess_score;
         if($score == $guess_score) {
-            return if length($module) >= length($guess);
+            return if length($plugin) >= length($guess);
         }
     }
-    $self->main_module_guess([$module, $score]);
+    $self->main_module_guess([$plugin, $score]);
 }
 
 

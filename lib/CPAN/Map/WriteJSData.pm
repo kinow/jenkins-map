@@ -2,6 +2,8 @@ package CPAN::Map::WriteJSData;
 
 use Moose;
 use namespace::autoclean;
+use Data::Dumper;
+use feature 'say';
 
 require File::Spec;
 
@@ -69,10 +71,10 @@ sub write_metadata {
     my($self, $out, $builder) = @_;
 
     print $out "[META]\n";
-    printf $out "mod_list_date,%s\n", $builder->mod_list_date;
-    printf $out "slug_of_the_day,%s\n", $builder->slug_of_the_day;
-    printf $out "module_count,%d\n", $builder->module_count;
-    printf $out "distribution_count,%d\n", $builder->distro_count;
+    printf $out "mod_list_date,%s\n", localtime #$builder->mod_list_date;
+    printf $out "slug_of_the_day,%s\n", "Hola!"; #$builder->slug_of_the_day;
+    printf $out "module_count,%d\n", $builder->plugin_count;
+    printf $out "distribution_count,%d\n", $builder->label_count;
     printf $out "maintainer_count,%d\n", $builder->maintainer_count;
     printf $out "map_image,%s\n", "cpan-map.png";
     printf $out "plane_rows,%s\n", $builder->plane_rows;
@@ -113,14 +115,13 @@ sub write_namespace_list {
     print $out "[NAMESPACES]\n";
     my $i = 0;
     my $namespace_number = $self->namespace_number;
-    $builder->each_namespace(sub {
+    $builder->each_label(sub {
         my($ns) = @_;
         printf $out "%s,%s,%X\n", $ns->name, $ns->colour, $ns->mass;
         $namespace_number->{ lc($ns->name) } = $i++;
     });
     $builder->progress_message(" - listed $i namespaces");
 }
-
 
 sub write_distribution_list {
     my($self, $out, $builder) = @_;
@@ -130,27 +131,36 @@ sub write_distribution_list {
     my $maintainer_number = $self->maintainer_number;
     my $namespace_number  = $self->namespace_number;
     my $i = 0;
-    $builder->each_distro(sub {
+    $builder->each_plugin(sub {
         my($distro) = @_;
+        #say Dumper $distro;
         my $distro_name = $distro->name;
-        $distro_name .= '/' . $distro->main_module unless $distro->is_eponymous;
-        my $ns = $builder->namespace_for_distro( $distro );
-        my $ns_number = defined($ns)
-                      ? sprintf('%X', $namespace_number->{ lc($ns->name) })
-                      : '';
-        my $maint_index = $maintainer_number->{ $distro->maintainer_id }
-            // die "Can't find maintainer number for " . $distro->maintainer_id;
-        my $score_count = '';
-        if($distro->rating_count) {
-            $score_count = ',' . $distro->rating_score . ','. $distro->rating_count;
+        #$distro_name .= '/' . $distro->main_module; # unless $distro->is_eponymous;
+        if(not defined($distro->labels)) {
+            next;
         }
-        printf $out "%s,%s,%X,%X,%X%s\n",
-            $distro_name,
-            $ns_number,
-            $maint_index,
-            $distro->row,
-            $distro->col,
-            $score_count;
+        foreach my $label (@{$distro->labels}) {
+            #my $ns = $builder->label_for_distro( $distro );
+            my $ns = $label;
+            my $ns_number = defined($ns)
+                          ? sprintf('%X', $namespace_number->{ lc($ns) })
+                          : '';
+            
+            #my $maint_index = $maintainer_number->{ $distro->maintainer_id }
+            my $maint_index = 0;
+            #    // die "Can't find maintainer number for " . $distro->maintainer_id;
+            my $score_count = '';
+            #if($distro->rating_count) {
+            #    $score_count = ',' . $distro->rating_score . ','. $distro->rating_count;
+            #}
+            printf $out "%s,%s,%X,%X,%X%s\n",
+                $distro_name,
+                $ns_number,
+                $maint_index,
+                $distro->row,
+                $distro->col,
+                $score_count;
+        }
         $i++;
     });
     $builder->progress_message(" - listed $i distros");
