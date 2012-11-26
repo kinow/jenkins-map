@@ -112,12 +112,13 @@ sub write_image_file {
     # Draw area for each distro
 
     my $dist_colour = sub {
-        if(my $ns = $builder->namespace_for_distro($_[0])) {
-            return $ns->colour;
+        if(my $ns = $builder->labels_for_plugin($_[0])) {
+            #return $ns->colour;
+            return @$ns[0];
         }
         return 0;
     };
-    $builder->each_distro(sub {
+    $builder->each_plugin(sub {
         my($distro) = @_;
         my $colour = $map_colour[ $dist_colour->($distro) ];
         my $borders = $self->border_flags($distro, $builder, $dist_colour);
@@ -129,7 +130,7 @@ sub write_image_file {
 
     if($font) {
         die "Font file does not exist: $font" unless -e $font;
-        $builder->each_namespace(sub {
+        $builder->each_label(sub {
             my($ns) = @_;
             $self->add_mass_label($im, $font, $ns);
         });
@@ -155,22 +156,22 @@ sub border_flags {
     my $flags = NORTH + SOUTH + EAST + WEST;
 
     if($row > 0) {
-        if(my $that = $builder->dist_at($row - 1, $col)) {
+        if(my $that = $builder->plugin_at($row - 1, $col)) {
             $flags &= (15 ^ NORTH) if $colour == $dist_colour->($that);
         }
     }
 
     if($col > 0) {
-        if(my $that = $builder->dist_at($row, $col - 1)) {
+        if(my $that = $builder->plugin_at($row, $col - 1)) {
             $flags &= (15 ^ WEST) if $colour == $dist_colour->($that);
         }
     }
 
-    if(my $that = $builder->dist_at($row + 1, $col)) {
+    if(my $that = $builder->plugin_at($row + 1, $col)) {
         $flags &= (15 ^ SOUTH) if $colour == $dist_colour->($that);
     }
 
-    if(my $that = $builder->dist_at($row, $col + 1)) {
+    if(my $that = $builder->plugin_at($row, $col + 1)) {
         $flags &= (15 ^ EAST) if $colour == $dist_colour->($that);
     }
 

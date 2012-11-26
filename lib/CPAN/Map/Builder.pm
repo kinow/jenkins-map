@@ -252,32 +252,55 @@ sub list_plugins_by_label {
     while(my ($plugin_name, $plugin_body) = each %plugins) {
     	my $plugin = $self->_parse_plugin($plugin_body);
     	if(defined $plugin->labels) {
+    	    
             if(ref $plugin->labels eq 'ARRAY') {
                 for my $plugin_label (@{$plugin->labels}) {
-                        if(not exists $label_plugins{$plugin_label}) {
-                                @{$label_plugins{$plugin_label}} = ();
-                        }
-                        push @{$label_plugins{$plugin_label}}, $plugin;
+                    my $existing_plugin = $label_plugins{$plugin_label}->{$plugin->name};
+                    if(not defined $existing_plugin) {
+                        $label_plugins{$plugin_label}->{$plugin->name} = $plugin;
+                    }
+                    
+                    # if(not exists $label_plugins{$plugin_label}) {
+                            # @{$label_plugins{$plugin_label}} = ();
+                    # }
+                    # push @{$label_plugins{$plugin_label}}, $plugin;
                 }
     	   } else {
-               if(not exists $label_plugins{$plugin->labels}) {
-                @{$label_plugins{$plugin->labels}} = ();
+    	       my $existing_plugin = $label_plugins{$plugin->labels}->{$plugin->name};
+               if(not defined $existing_plugin) {
+                    $label_plugins{$plugin->labels}->{$plugin->name} = $plugin;
+                    $plugin->check_for_main_plugin($plugin);
                }
-               push @{$label_plugins{$plugin->labels}}, $plugin;
+               # if(not exists $label_plugins{$plugin->labels}) {
+                # @{$label_plugins{$plugin->labels}} = ();
+               # }
+               # push @{$label_plugins{$plugin->labels}}, $plugin;
     	   }
     	}
-    	$self->add_plugin($plugin);
+    	#$self->add_plugin($plugin);
     }
+    
+    # Create an alphabetical list of plugins and save counts ('mass') of
+    # plugins per label
     
     my $mass_map = $self->mass_map;
     my $label_count = 0;
-    foreach my $label (keys %label_plugins) {
+    foreach my $label (sort keys %label_plugins) {
+        my $plugins_for_label = delete $label_plugins{$label};
+        my @plugins = keys %$plugins_for_label;
     	$label_count++;
     	
-    	$mass_map->{$label} = CPAN::Map::Namespace->new(
+    	my $this_label = $mass_map->{$label} = CPAN::Map::Namespace->new(
             name => $label,
-            mass => scalar(@{$label_plugins{$label}}),
+            #mass => scalar(@{$label_plugins{$label}}),
+            mass => scalar(@plugins),
         );
+        
+        foreach my $label_name (sort { lc($a) cmp lc($b) } @plugins) {
+            my $plugin = $plugins_for_label->{$label_name};
+            
+            $self->add_plugin($plugin);
+        }
     }
     
     $self->label_count($label_count);
@@ -409,9 +432,10 @@ sub each_label {
 }
 
 
-sub label_for_distro {
-    my($self, $distro) = @_;
-    return $self->mass_map->{ $distro->ns };
+sub labels_for_plugin {
+    my($self, $plugin) = @_;
+    #return $self->mass_map->{ $distro->ns };
+    return $self->mass_map->{ $plugin->labels };
 }
 
 
@@ -491,8 +515,8 @@ sub identify_mass_areas {
 
     # Assign colors to namespaces with critical mass
     $self->progress_message(" - allocating colours to map regions");
-    my $colour_map = map_colours({}, \%neighbour, @critical_ns);
-        #or die "Unable to assign colour map";
+    my $colour_map = map_colours({}, \%neighbour, @critical_ns)
+        or die "Unable to assign colour map";
 
     while(my($key, $value) = each %$colour_map) {
         my $mass = $mass_map->{$key};
@@ -507,11 +531,10 @@ sub map_colours {
     no warnings qw(recursion);
     return $map unless $ns;
     my $near = $neighbour->{$ns} or die "no neigbours for $ns!?!";
-    my %available = map { $_ => 1 } (1..4);
+    my %available = map { $_ => 1 } (1..20);
     foreach my $n ( @$near ) {
         delete $available{ $map->{$n} } if $map->{$n};
     }
-
     foreach my $try (sort keys %available) {
         $map->{$ns} = $try;
         return $map if map_colours($map, $neighbour, @namespaces);

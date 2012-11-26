@@ -72,7 +72,7 @@ sub write_metadata {
 
     print $out "[META]\n";
     printf $out "mod_list_date,%s\n", localtime #$builder->mod_list_date;
-    printf $out "slug_of_the_day,%s\n", "Hola!"; #$builder->slug_of_the_day;
+    printf $out "slug_of_the_day,%s\n", ""; #$builder->slug_of_the_day;
     printf $out "module_count,%d\n", $builder->plugin_count;
     printf $out "distribution_count,%d\n", $builder->label_count;
     printf $out "maintainer_count,%d\n", $builder->maintainer_count;
